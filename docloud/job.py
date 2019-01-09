@@ -143,12 +143,12 @@ class JobAttachmentInfo(object):
         # user provided filename -> open file
         if self.filename is not None:
             self._my_file = open(self.filename, "rb")
-            return False, self._my_file      
-    
+            return False, self._my_file
+
     def get_data_or_file(self, gzip=False):
         """Returns the data for this attachment, or the file like object if
         it is a file like object.
-        
+
         Args:
             gzip: if True, then the data is gzipped before returned.
         """
@@ -249,7 +249,7 @@ class DOcloudInterruptedException(DOcloudException):
 
 class JobClient(object):
     """A client to create, submit and monitor jobs on DOcplexcloud.
-    
+
     Attributes:
         url(str): The URL this client connects to.
         timeout(float): The timeout used when listening on sockets. The timeout
@@ -262,16 +262,19 @@ class JobClient(object):
     DEFAULT_TIMEOUT = 60  # 60 sec of default timeout should be enough
     DEFAULT_ENCODING = "utf-8"  # default encoding used
     DEFAULT_NICE = 2  # default is to wait 2 sec between polls while waiting
-        
+
     BOOLEAN_VALUES_FOR_URL = {True: 'true', False: 'false'}
-    
-    def __init__(self, url, api_key, client_secret=None, max_retries=1):
+
+    def __init__(self, url, api_key, client_secret=None, 
+                 proxies=None, max_retries=1):
         """Inits JobClient.
-        
+
         Args:
             url (str): The URL to connect to.
             api_key (str): The API key.
             client_secret (str): The client secret of the API key.
+            proxies (dict): Optional dictionary mapping protocol to the URL of
+               the proxy.
         """
         self.url = url
         self.api_key = api_key
@@ -305,18 +308,20 @@ class JobClient(object):
         # a callback that is called before a request is performed
         # called with parameters (rest method as String, url, *args, **kwargs)
         self.rest_callback = None
-        
-        
+        # optional parameters for all requests
+        self.requests_options = dict()
+        if proxies is not None:
+            self.requests_options['proxies'] = proxies
+
     def __enter__(self):
         return self
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
-        
+
     def _info(self, *args, **kwargs):
         if (self.logger is not None):
             self.logger.info(*args, **kwargs)
-        
 
     def _check_status(self, response, ok_status):
         """ Checks that the request is performed correctly. """
@@ -331,7 +336,8 @@ class JobClient(object):
                     if more_info != "":
                         more_info = "({0})".format(more_info)
                     http_code = j.get("httpCode", "")
-                    message = "{0} {1} {2}".format(http_code, http_message, more_info)
+                    message = "{0} {1} {2}".format(http_code, http_message,
+                                                   more_info)
                 else:
                     message = str(j)
             except ValueError:
@@ -341,21 +347,19 @@ class JobClient(object):
             elif response.status_code == 404:
                 raise DOcloudNotFoundError(message)
             raise DOcloudException(message)
-        
+
     def _check_ok(self, response):
         """ Checks that the request is performed correctly. """
         return self._check_status(response, [200])
-    
+
     def _check_created(self, response):
         """ Checks that the request is performed correctly. """
         return self._check_status(response, [201])
-    
+
     def _check_ok_no_content(self, response):
         """ Checks if the response is 204 No Content."""
         return self._check_status(response, [204])
-                
-    
-    
+
     def _post(self, url, data=None, timeout=None):
         tm_sec = self.timeout if timeout is None else timeout
         if self.rest_callback:
@@ -363,42 +367,48 @@ class JobClient(object):
                                data=data,
                                headers=self._base_headers,
                                verify=self.verify,
-                               timeout=tm_sec)
-        response = self.session.post(url, 
+                               timeout=tm_sec,
+                               **self.requests_options)
+        response = self.session.post(url,
                                      data=data,
-                                     headers=self._base_headers, 
+                                     headers=self._base_headers,
                                      verify=self.verify,
-                                     timeout=tm_sec)
+                                     timeout=tm_sec,
+                                     **self.requests_options)
         return response
-    
-    def _get(self, url,timeout=None,stream=False):
+
+    def _get(self, url, timeout=None, stream=False):
         tm_sec = self.timeout if timeout is None else timeout
-        if self.rest_callback: 
+        if self.rest_callback:
             self.rest_callback("get", url,
                                headers=self._base_headers,
                                verify=self.verify,
                                timeout=tm_sec,
-                               stream=stream)
+                               stream=stream,
+                               **self.requests_options)
         response = self.session.get(url,
-                                    headers=self._base_headers, 
-                                    verify=self.verify, 
+                                    headers=self._base_headers,
+                                    verify=self.verify,
                                     timeout=tm_sec,
-                                    stream=stream)
+                                    stream=stream,
+                                     **self.requests_options)
         return response
-    
-    def _delete(self, url,timeout=None):
+
+    def _delete(self, url, timeout=None):
         tm_sec = self.timeout if timeout is None else timeout
         if self.rest_callback:
             self.rest_callback("delete", url,
                                headers=self._base_headers,
                                verify=self.verify,
-                               timeout=tm_sec)
-        response = self.session.delete(url, 
-                                       headers=self._base_headers, 
+                               timeout=tm_sec,
+                               **self.requests_options)
+        response = self.session.delete(url,
+                                       headers=self._base_headers,
                                        verify=self.verify,
-                                       timeout=tm_sec)
+                                       timeout=tm_sec,
+                                       **self.requests_options)
         return response
-    
+
     def _put(self, url, data=None, timeout=None, gzip=False):
         tm_sec = self.timeout if timeout is None else timeout
         headers = self._stream_headers
@@ -411,14 +421,16 @@ class JobClient(object):
                                data=data,
                                headers=headers,
                                verify=self.verify,
-                               timeout=tm_sec)
-        response = self.session.put(url, 
+                               timeout=tm_sec,
+                               **self.requests_options)
+        response = self.session.put(url,
                                     data=data,
                                     headers=headers,
-                                    verify=self.verify, 
-                                    timeout=tm_sec)
+                                    verify=self.verify,
+                                    timeout=tm_sec,
+                                    **self.requests_options)
         return response
-        
+
     def close(self):
         """ Closes this client and free up used resources.
         """
@@ -449,7 +461,9 @@ class JobClient(object):
 
         return jobid
 
-    def prepare_results_format_parameter_from_output_spec(self, output=None, parameters=None):
+    def prepare_results_format_parameter_from_output_spec(self,
+                                                          output=None,
+                                                          parameters=None):
         # If ``output`` specification needs a result format parameter change,
         #    return the new parameters.
         #    Else return ``parameters``
@@ -587,6 +601,10 @@ class JobClient(object):
                         with open(output_mapping[a["name"]], "wb") as f:
                             f.write(output_data)
                     if a["name"] == solution_att_name:
+                        if a["name"] not in output_mapping:
+                            # download data if it has not been downloaded
+                            output_data = self.download_job_attachment(jobid,
+                                                                       a["name"])
                         has_solution = True
                         solution = output_data
             # download log
@@ -612,7 +630,6 @@ class JobClient(object):
             if delete_on_completion and completed:
                 self.delete_job(jobid, timeout=timeout)
         return response
-
 
     def create_job(self, **kwargs):
         """ Creates a new job.
@@ -697,32 +714,32 @@ class JobClient(object):
 
     def copy_job(self, jobid, shallow=None, **kwargs):
         """Creates a new job by copying an existing one.
-        
+
         The existing job must not be running or waiting for execution. All
-        creation data is copied over to the new job.  By default, the input 
+        creation data is copied over to the new job.  By default, the input
         attachments and their contents are copied in the new job. If a shallow
-        copy is requested the new attachment will point to the existing job, 
-        and if it is deleted, accessing the attachment will raise an exception. 
-        Output attachments are not copied. Optionally, a job creation data can 
-        be passed to override the parameters and declare additional or 
+        copy is requested the new attachment will point to the existing job,
+        and if it is deleted, accessing the attachment will raise an exception.
+        Output attachments are not copied. Optionally, a job creation data can
+        be passed to override the parameters and declare additional or
         replacement input attachments.
-        
+
         Args:
             jobid: The id of the job to copy.
             shallow: Indicates if the copy is shallow.
-        
+
         Note:
             The ``kwargs`` are JSON encoded and passed to the DOcplexcloud service as
             job creation data override.
-        
+
         Returns:
             The id of the copy.
         """
-        override_data = json.dumps(kwargs)        
+        override_data = json.dumps(kwargs)
         shallow_option = ""
         if shallow is not None:
             shallow_option = "?shallow={0!s}".format(JobClient.BOOLEAN_VALUES_FOR_URL[shallow])
-        
+
         url = '{base_url}/jobs/{jobid}/copy{shallow}'.format(base_url=self.url,
                                                              jobid=jobid,
                                                              shallow=shallow_option)
@@ -735,23 +752,23 @@ class JobClient(object):
 
     def recreate_job(self, jobid, execute=None, **kwargs):
         """Creates a new job by replacing an existing one.
-        
+
         This can be used to resubmit a failed job for example. The existing
-        job must not be running or waiting for execution. All creation data 
-        is copied over to the new job. Input attachments are declared in the 
+        job must not be running or waiting for execution. All creation data
+        is copied over to the new job. Input attachments are declared in the
         new job and the content is owned by the new job. Output attachments are
-        ignored. Optionally, a job creation data can be passed to override the 
-        parameters and declare additional input attachments. The existing job 
+        ignored. Optionally, a job creation data can be passed to override the
+        parameters and declare additional input attachments. The existing job
         is automatically deleted.
-        
+
         Args:
             jobid: The id of the job to recreate.
             execute: Indicates if the job must be executed immediately.
-        
+
         Note:
             The ``kwargs`` are JSON encoded and passed to the DOcplexcloud service as
             job creation data override.
-        
+
         Returns:
             The id of the copy.
         """
@@ -778,13 +795,15 @@ class JobClient(object):
              jobid: The id of the job.
             timeout: The timeout for requests.
         """
-        url = '{base_url}/jobs/{jobid}/execute'.format(base_url=self.url, 
+        url = '{base_url}/jobs/{jobid}/execute'.format(base_url=self.url,
                                                        jobid=jobid)
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
 
-
-    def create_job_attachment(self, jobid, attachment_creation_data, timeout=None):
+    def create_job_attachment(self,
+                              jobid,
+                              attachment_creation_data,
+                              timeout=None):
         """ Creates an attachment for the job which id is specified.
 
         Attachment creation data is a ``dict`` which can contain the following keys:
@@ -792,7 +811,7 @@ class JobClient(object):
         - name: The name of the attachment.
         - length: The length of the attachment. (Optional)
 
-        Args:    
+        Args:
             jobid: The id of the job.
             attachment_creation_data: Attachment creation data
             timeout: The timeout for requests. 
@@ -807,32 +826,32 @@ class JobClient(object):
                               timeout=timeout)
         self._check_created(response)
         attachment_url = response.headers['location']
-        attid = attachment_url.rsplit("/",1)[1]
+        attid = attachment_url.rsplit("/", 1)[1]
         return attid
 
     def delete_all_jobs(self, timeout=None):
-        """ Deletes all jobs for the user. 
+        """ Deletes all jobs for the user.
 
         Args:
-            timeout: The timeout for requests. 
+            timeout: The timeout for requests.
         """
         url = '{base_url}/jobs'.format(base_url=self.url)
         self._info(_("deleting all jobs"))
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
 
-    
+
     def delete_job(self, jobid, timeout=None):
         """ Deletes the specified job.
-        
+
         Args:
             jobid: The id of the job.
-            timeout: The timeout for requests. 
-        
+            timeout: The timeout for requests.
+
         Returns:
             True if the job deletion was successful.
         """
-        url = '{base_url}/jobs/{jobid}'.format(base_url=self.url,jobid=jobid)
+        url = '{base_url}/jobs/{jobid}'.format(base_url=self.url, jobid=jobid)
         self._info(_("deleting job {job_id}").format(job_id=jobid))
         response = self._delete(url, timeout=timeout)
         self._check_ok(response)
@@ -841,15 +860,14 @@ class JobClient(object):
         self._info(_("   deleted with status = {}").format(j['status']))
         return deleteStatus
 
-
     def delete_job_attachment(self, jobid, attid, timeout=None):
         """ Deletes the specified job attachment.
-        
+
         Args:
             jobid: The id of the job.
             attid: The attachment id.
-            timeout: The timeout for requests.  
-        
+            timeout: The timeout for requests
+
         Returns:
              True if the job attachment deletion was successful.
         """
@@ -863,13 +881,13 @@ class JobClient(object):
         deleteStatus = (j['status'] == 'DELETED')
         self._info(_("   deleted with status = {}").format(j['status']))
         return deleteStatus
-    
+
     def delete_job_attachments(self, jobid, timeout=None):
         """ Deletes all job attachment.
-        
+
         Args:
             jobid: The id of the job.
-            timeout: The timeout for requests.  
+            timeout: The timeout for requests.
         """
         url = '{base_url}/jobs/{jobid}/attachments'.format(base_url=self.url,
                                                            jobid=jobid)
@@ -877,17 +895,16 @@ class JobClient(object):
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
 
-    
     def download_job_attachment(self, jobid, attid, timeout=None):
         """ Download the specified job attachment.
-        
+
         The attachment data is fully loaded into memory then returned.
-        
+
         Args:
             jobid: The id of the job.
             attid: The attachment id.
-            timeout: The timeout for requests.  
-        
+            timeout: The timeout for requests.
+
         Returns:
             The contents of the attachment as a byte array.
         """
@@ -898,29 +915,29 @@ class JobClient(object):
         response = self._get(url, timeout=timeout)
         self._check_ok(response)
         return response.content
-    
+
     def download_job_attachment_as_stream(self, jobid, attid, timeout=None):
         """ Download the specified job attachment as stream.
-        
+
         Instead of downloading the data, the response object resulting from
         the request is returned.
-        
+
         Example:
             This is an example code downloading the attachment to a local
             file::
-        
+
                 r = client.download_job_attachment_as_stream(jobid, attid)
                 with open('local_filename', 'wb') as f:
                     for chunk in r.iter_content(chunk_size=1024):
                         if chunk:
                             f.write(chunk)
                     f.flush()
-                
+
         Args:
             jobid: The id of the job.
             attid: The attachment id.
             timeout: The timeout for requests.  
-        
+
         Returns:
             The reponse object to iter from.
         """
@@ -931,51 +948,49 @@ class JobClient(object):
         response = self._get(url, timeout=timeout, stream=True)
         self._check_ok(response)
         return response
-    
+
     def download_job_log(self, jobid, timeout=None):
         """ Downloads the job logs and returns the contents as a string.
-        
+
         Args:  
             jobid: The id of the job.
             timeout: The timeout for requests.  
-        
+
         Returns:
             The contents of the logs as a string.
         """
-        url = '{base_url}/jobs/{jobid}/log/blob'.format(base_url=self.url, 
+        url = '{base_url}/jobs/{jobid}/log/blob'.format(base_url=self.url,
                                                         jobid=jobid)
         self._info(_("downloading log of job {jobid}").format(jobid=jobid))
-        response = self._get(url, timeout=timeout)       
-        self._check_ok(response)     
+        response = self._get(url, timeout=timeout)
+        self._check_ok(response)
         return response.content
-               
-    
+
     def execute_job(self, jobid, timeout=None):
         """ Submits the specified job for execution.
-        
+
         Args:
             jobid: The id of the job.
-            timeout: The timeout for requests.  
+            timeout: The timeout for requests.
         """
-        url = '{base_url}/jobs/{jobid}/execute'.format(base_url=self.url, 
+        url = '{base_url}/jobs/{jobid}/execute'.format(base_url=self.url,
                                                        jobid=jobid)
         self._info(_("executing job {}").format(jobid))
         response = self._post(url, timeout)
         self._check_ok_no_content(response)
 
-            
     def get_failure_info(self, jobid, timeout=None):
         """ Gets the failure information for the specified job.
-        
+
         Args:
             jobid: The id of the job.
-            timeout: The timeout for requests.  
-        
+            timeout: The timeout for requests.
+
         Returns:
-            The job information as a dict containing the failure 
+            The job information as a dict containing the failure
             information.
         """
-        url = '{base_url}/jobs/{jobid}/failure'.format(base_url=self.url, 
+        url = '{base_url}/jobs/{jobid}/failure'.format(base_url=self.url,
                                                        jobid=jobid)
         self._info(_("getting job failure info for job {}").format(jobid))
         response = self._get(url, timeout=timeout)
@@ -983,14 +998,14 @@ class JobClient(object):
         if (response.status_code == 200):
             return response.json()
         return None
-    
+
     def get_job(self, jobid, timeout=None):
         """ Gets the information for the specified job.
-        
+
         Args:
             jobid: The id of the job.
-            timeout: The timeout for requests.  
-        
+            timeout: The timeout for requests.
+
         Returns:
             The job information as a ``dict`` containing the job information.
         """
@@ -999,14 +1014,13 @@ class JobClient(object):
         response = self._get(url, timeout)
         self._check_ok(response)
         return response.json()
-    
-    
+
     def get_all_jobs(self, timeout=None):
         """ Returns all jobs for this user.
-        
+
         Args:
-            timeout: The timeout for requests.  
-        
+            timeout: The timeout for requests.
+
         Returns:
             A list of job information. Job information is a ``dict``
             containing the job information.
@@ -1017,15 +1031,14 @@ class JobClient(object):
         self._check_ok(response)
         return response.json()
 
-
     def get_job_attachment(self, jobid, attid, timeout=None):
         """ Returns the job attachment info for the specified job.
-        
+
         Args:
             jobid: The id of the job.
             attid: The attachment id.
             timeout: The timeout for requests.  
-        
+
         Returns:
             The job attachment info as a ``dict``.
         """
@@ -1036,40 +1049,39 @@ class JobClient(object):
         response = self._get(url, timeout=timeout)
         self._check_ok(response)
         return response.json()
-    
+
     def get_job_attachments(self, jobid, timeout=None):
-        """ Returns the attachments for a given job. 
-        
+        """ Returns the attachments for a given job.
+
         The returned list of attachments is a list of ``dict``.
-        
+
         Each entry can contain the following keys:
-        
+
         - name: The name of the attachment.
         - type: The type of the attachment.
         - length: The length of the attachement.
-        
+
         Args:
             jobid: The id of the job.
             attid: The attachment id.
-        
+
         Returns:
             A list of the attachments.
         """
-        url = '{base_url}/jobs/{jobid}/attachments'.format(base_url=self.url, 
+        url = '{base_url}/jobs/{jobid}/attachments'.format(base_url=self.url,
                                                            jobid=jobid)
         self._info(_("getting all attachment info from job {}").format(jobid))
         response = self._get(url, timeout=None)
         self._check_ok(response)
         return response.json()
-    
-    
+
     def get_execution_status(self, jobid, timeout=None):
-        """ Returns the execution status of job. 
-        
+        """ Returns the execution status of job.
+
         Args:
             jobid: The id of the job.
-            timeout: The timeout for requests.    
-        
+            timeout: The timeout for requests.
+
         Returns:
             A ``JobExecutionStatus``
         """
@@ -1081,16 +1093,15 @@ class JobClient(object):
         j = response.json()
         return JobExecutionStatus[j["executionStatus"]]
 
-
     def get_log_items(self, jobid, start=None, continuous=None, timeout=None):
-        """ Returns a list of log items for a job. 
-        
+        """ Returns a list of log items for a job.
+
         Args:
             jobid: The id of the job.
             start: The log item starting index.
             continuous: If True, return items as they become available.
-            timeout: The timeout for requests.    
-        
+            timeout: The timeout for requests.
+
         Returns:
             A list containing the log items.
         """
@@ -1099,43 +1110,41 @@ class JobClient(object):
             params.append("start={0}".format(start))
         if (continuous is not None):
             params.append("continuous={0}".format(continuous))
-            
+
         paramString = ""
         if (len(params) != 0):
             paramString = "?" + '&'.join(params)
-        
+
         url = '{base_url}/jobs/{jobid}/log/items{p}'.format(base_url=self.url, 
                                                             jobid=jobid, 
                                                             p=paramString)
         response = self._get(url, timeout=timeout)
         self._check_ok(response)
         return response.json()
-    
-    
+
     def kill_job(self, jobid, timeout=None):
-        """ Kills the specified job. 
-        
+        """ Kills the specified job.
+
         Args:
             jobid: The id of the job.
-            timeout: The timeout for requests.       
+            timeout: The timeout for requests.
         """
         url = '{base_url}/jobs/{jobid}/execute?kill=true'\
             .format(base_url=self.url, jobid=jobid)
         self._info(_("Killing job {jobid}").format(jobid=jobid))
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
-    
-    
-    def upload_job_attachment(self, jobid, attid, 
-                              file=None, data=None, filename=None, 
+
+    def upload_job_attachment(self, jobid, attid,
+                              file=None, data=None, filename=None,
                               timeout=None, gzip=False):
         """ Uploads the attachment ``attid`` for the specified job id. One of
         the following can be specified:
-        
+
         - file : The file which contents is read using ``get()`` before sent.
         - data : The data is sent as a byte array.
         - filename : The name of a file that is opened and ``get()``.
-        
+
         Args:
             jobid: The id of the job.
             attid: The id of the attribute.
@@ -1145,22 +1154,22 @@ class JobClient(object):
             timeout: The timeout for requests.
             gzip: If True, the data is gzipped before sent
         """
-        att = JobAttachmentInfo({'name': attid}, 
+        att = JobAttachmentInfo({'name': attid},
                                 file=file, data=data, filename=filename)
         try:
             # now let's upload that
             url = '{base_url}/jobs/{jobid}/attachments/{attid}/blob'\
-                .format(base_url=self.url, jobid=jobid, attid=attid)    
+                .format(base_url=self.url, jobid=jobid, attid=attid)
             self._info(_("uploading attachment to {url}").format(url=url))
 
-            response = self._put(url, 
+            response = self._put(url,
                                  data=att.get_data_or_file(gzip=gzip),
                                  gzip=gzip)
             self._check_ok_no_content(response)
         finally:
             att.close_file()
 
-    def wait_and_get_solution(self, jobid, timeout=None, waittime=-1, 
+    def wait_and_get_solution(self, jobid, timeout=None, waittime=-1,
                               nice=None):
         """Waits for the specfied job to finish, then download solution.
 
@@ -1210,7 +1219,7 @@ class JobClient(object):
         return response
 
 
-    def wait_for_completion(self, jobid, timeout=None, waittime=-1, nice=None):    
+    def wait_for_completion(self, jobid, timeout=None, waittime=-1, nice=None):
         """Waits for the specified job to finish.
 
         This loops and queries for the job execution status until the status is ended.
@@ -1236,7 +1245,7 @@ class JobClient(object):
         """
         nice_sec = self.nice if nice is None else nice
 
-        time_limit = time.time() + waittime 
+        time_limit = time.time() + waittime
         self._info(_("waiting for completion of {jobid} with a waittime of {waittime}").format(jobid=jobid,
                                                                                                waittime=waittime))
         status = None
