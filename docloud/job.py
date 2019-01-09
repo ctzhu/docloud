@@ -3,15 +3,23 @@ from docloud.status import JobExecutionStatus
 import json
 import gettext
 import gzip as gz
-from io import BytesIO
 import os
 import sys
+import tempfile
 import time
+import datetime
+import shutil
+from io import BytesIO
 
 import requests
 
 import six
 from six import iteritems, string_types
+
+try:
+    import pandas
+except ImportError:
+    pandas = None
 
 
 # initialize gettext
@@ -34,6 +42,16 @@ def default_solution_name(parameters):
             if solution_attachment_ext == 'text':
                 solution_attachment_ext = 'txt'
     return "solution.%s" % solution_attachment_ext
+
+
+def download_and_format_log_items(client, jobid, seqid, log_file):
+    logs = client.get_log_items(jobid, seqid, True)
+    for log in logs:
+        seqid = log['seqid'] + 1
+        for r in log['records']:
+            message = r['message'].rstrip()
+            log_file.write('%s\n' % message)
+    return seqid
 
 
 class JobAttachmentInfo(object):
@@ -99,6 +117,10 @@ class JobAttachmentInfo(object):
                 self.filename = att_info
             else:
                 raise ParameterError(_("JobClient.uploadAttachment(): File not found \"%s\"") % att_info)
+        # if data is a file-like (has a read()) method, just set it to file
+        if self.data and hasattr(self.data, 'read'):
+            self.file = self.data
+            self.data = None
         # Check that this is well constructed and that only one of file, data
         # or filename is set
         notNone = int(self.file is not None) + int(self.data is not None) \
@@ -107,11 +129,20 @@ class JobAttachmentInfo(object):
             raise ParameterError(_("JobClient.uploadAttachment() needs one of (data, file, filename) parameters"))
 
     def __build_from_dict(self, obj):
-        # parse the obj as a dict for attachment file, filename or data
         self.name = obj['name']
-        self.file = obj.get('file', self.file)
+        file = obj.get('file', self.file)
+        data = obj.get('data', self.data)
+        if pandas and isinstance(data, pandas.DataFrame):
+            # as we always convert to csv, no need to check extension on name
+            file = tempfile.TemporaryFile('w+b')
+            z = data.to_csv(index=False)  # no way to really force pandas.to_csv() to write bytes...
+            file.write(z.encode('utf-8'))
+            file.flush()
+            file.seek(0)
+            data = None  # we replace data with file containing the csv
+        self.file = file
         self.filename = obj.get('filename', self.filename)
-        self.data = obj.get('data', self.data)
+        self.data = data
 
     def get_data(self):
         """ Returns the data for this attachment.
@@ -164,15 +195,15 @@ class JobAttachmentInfo(object):
         """
         is_data, data_or_file = self._get_data_or_file()  
         if gzip:
-            data = BytesIO()
-            with gz.GzipFile(fileobj=data, mode="wb") as f:
+            gzipped = tempfile.TemporaryFile("w+b")
+            with gz.GzipFile(fileobj=gzipped, mode="wb") as f:
                 if is_data:
                     f.write(data_or_file)
                 else:
-                    f.write(data_or_file.read())
+                    shutil.copyfileobj(data_or_file, f)
             # reset position so that read() will return the contents
-            data.seek(0)
-            return data
+            gzipped.seek(0)
+            return gzipped
         else:
             return data_or_file
 
@@ -296,7 +327,7 @@ class JobClient(object):
         nice(float): When greater than zero, specifies a time in seconds between
             requests in loops.
     """
-    DEFAULT_TIMEOUT = 60  # 60 sec of default timeout should be enough
+    DEFAULT_TIMEOUT = 180  # default timeout
     DEFAULT_ENCODING = "utf-8"  # default encoding used
     DEFAULT_NICE = 2  # default is to wait 2 sec between polls while waiting
 
@@ -383,7 +414,8 @@ class JobClient(object):
                 raise DOcloudForbiddenError(message)
             elif response.status_code == 404:
                 raise DOcloudNotFoundError(message)
-            raise DOcloudException(message)
+            raise DOcloudException('{0}: {1}'.format(response.status_code,
+                                                     message))
 
     def _check_ok(self, response):
         """ Checks that the request is performed correctly. """
@@ -524,7 +556,8 @@ class JobClient(object):
 
     def execute(self, input=None, output=None, load_solution=False, log=None,
                 delete_on_completion=True, timeout=None, waittime=-1,
-                gzip=False, parameters=None):
+                gzip=False, parameters=None, continuous_logs=True,
+                info_cb=None):
         """Submit and monitor a job execution.
 
         Submits a job and waits for the execution to end.
@@ -570,7 +603,11 @@ class JobClient(object):
                 available, the ``solution`` field of the response contains
                 the output attachment which name is ``solution.extension`` where
                 ``extension`` is the output format extension.
-            log: The filename where to save job logs.
+            log: The filename where to save job logs or a file-like object to
+                write logs to.
+            continuous_logs: If True, logs are downloaded as available. If False,
+                logs are downloaded and written to the log stream at job
+                completion.
             delete_on_completion: If set, the job is deleted after it is
                 completed.
             waittime: The maximum time to wait.
@@ -578,7 +615,9 @@ class JobClient(object):
                 it is uploaded.
             parameters: A ``dict`` with additional job parameters.
                 See `Job Parameters <https://developer.ibm.com/docloud/documentation/docloud/job-parameters/>`_.
-
+            info_cb: A callback called each time a job info has been received
+                from the server. The info_cb first parameter is a dict with
+                the job info, see :meth:`~docloud.job.JobClient.get_job`.
         Returns:
             A ``JobResponse`` with the execution status of the job.
 
@@ -602,7 +641,6 @@ class JobClient(object):
         if isinstance(output, dict):
             # assume output maps (attribute name -> filename)
             output_mapping = output
-
         # submit job
         jobid = self.submit(input=input, timeout=timeout, gzip=gzip,
                             parameters=parameters)
@@ -612,7 +650,10 @@ class JobClient(object):
             # monitor job execution
             status = self.wait_for_completion(jobid,
                                               timeout=timeout,
-                                              waittime=waittime)
+                                              waittime=waittime,
+                                              log=log,
+                                              continuous_logs=continuous_logs,
+                                              info_cb=info_cb)
             # if waittime or timeout elapsed without this finishing,
             # an interruption exception should have been raised at this point.
             # it's safe to assume that the job has completed when we reach
@@ -641,22 +682,6 @@ class JobClient(object):
                                                                        a["name"])
                         has_solution = True
                         solution = output_data
-            # download log
-            if (log is not None):
-                with open(log, "wb") as f:
-                    logs = self.download_job_log(jobid)
-                    f.write(logs)
-            # download solution
-            """
-            solution = None
-            if status is not JobExecutionStatus.FAILED and has_solution:
-                if output_solution_filename is not None or load_solution:
-                    solution = self.download_job_attachment(jobid,
-                                                            solution_att_name)
-                if output_solution_filename is not None:
-                    with open(output, "wb") as f:
-                        f.write(solution)
-            """
             if load_solution:
                 response.solution = solution
         finally:
@@ -736,7 +761,7 @@ class JobClient(object):
             for inp in attachmentInfo:
                 self.upload_job_attachment(job_id, 
                                            attid=inp.name,
-                                           data=inp.get_data(),
+                                           data=inp.get_data_or_file(),
                                            gzip=gzip)
         return job_id
 
@@ -977,6 +1002,34 @@ class JobClient(object):
         self._check_ok(response)
         return response
 
+    def download_job_attachment_as_df(self, jobid, attid, timeout=None):
+        """ Download the specified job attachment as a `pandas.DataFrame`.
+
+        The attachment must be a valid `.csv` file.
+
+        Example:
+            This is an example code downloading the attachment to a local
+            file::
+
+                df = client.download_job_attachment_as_df(jobid, 'output_df.csv')
+
+        Args:
+            jobid: The id of the job.
+            attid: The attachment id.
+            timeout: The timeout for requests.  
+
+        Returns:
+            The data frame.
+
+        Raises:
+            NotImplementedError if `pandas` is not available
+        """
+        if pandas is None:
+            raise NotImplementedError(_("Pandas must be installed for download_job_attachment_as_df()"))
+        data = self.download_job_attachment(jobid, attid=attid, timeout=timeout)
+        result_df = pandas.read_csv(BytesIO(data), index_col=None)
+        return result_df
+
     def download_job_log(self, jobid, timeout=None):
         """ Downloads the job logs and returns the contents as a string.
 
@@ -1036,6 +1089,7 @@ class JobClient(object):
 
         Returns:
             The job information as a ``dict`` containing the job information.
+            See `DOcplexcloud REST API reference <https://api-swagger-oaas.docloud.ibmcloud.com/api_swagger/?cm_mc_uid=15669745777015105815231&cm_mc_sid_50200000=1512381269#!/jobs/getJob>`_.
         """
         url = '{base_url}/jobs/{jobid}'.format(base_url=self.url, jobid=jobid)
         self._info(_("getting job info for job {}").format(jobid))
@@ -1170,7 +1224,7 @@ class JobClient(object):
         the following can be specified:
 
         - file : The file which contents is read using ``get()`` before sent.
-        - data : The data is sent as a byte array.
+        - data : The data as a bytearray or as a `pandas.DataFrame`
         - filename : The name of a file that is opened and ``get()``.
 
         Args:
@@ -1247,26 +1301,36 @@ class JobClient(object):
                                                              solution_att_name)
         return response
 
-
-    def wait_for_completion(self, jobid, timeout=None, waittime=-1, nice=None):
+    def wait_for_completion(self, jobid, timeout=None,
+                            waittime=-1, nice=None,
+                            log=None, continuous_logs=True,
+                            info_cb=None):
         """Waits for the specified job to finish.
 
-        This loops and queries for the job execution status until the status is ended.
+        This loops and queries for the job execution status until the status is
+        ended.
 
-        This will wait for ``waittime`` seconds. A ``waittime`` of -1 means waiting
-        indefinitely.
+        This will wait for ``waittime`` seconds. A ``waittime`` of -1 means
+        waiting indefinitely.
 
         The ``timeout`` parameter controls the timeout to listen on sockets.
 
-        If ``nice`` is specified, this method will wait for that amount of seconds
-        between each execution status query.
+        If ``nice`` is specified, this method will wait for that amount of
+        seconds between each execution status query.
 
         Args:
             jobid: The id of the job.
             timeout: The timeout for requests.
             waittime: The maximum time to wait.
             nice: Additional sleep time between status requests.
-
+            log: The filename where to save job logs or a file-like object to
+                write logs to.
+            continuous_logs: If True, logs are downloaded as available. If
+                False, logs are downloaded and written to the log stream at job
+                completion.
+            info_cb: A callback called each time a job info has been received
+                from the server. The info_cb first parameter is a dict with
+                the job info, see :meth:`~docloud.job.JobClient.get_job`.
         Returns:
             The job execution status as a ``JobExecutionStatus``.
         Raises:
@@ -1274,15 +1338,42 @@ class JobClient(object):
         """
         nice_sec = self.nice if nice is None else nice
 
+        last_seqid = 0
+        log_file = None
+        my_log_file = None  # when we open the file, remember to close() later
+        if log:
+            if isinstance(log, six.string_types):
+                my_log_file = open(log, "w")
+                log_file = my_log_file
+            else:
+                log_file = log  # use log as a file like
+
         time_limit = time.time() + waittime
         self._info(_("waiting for completion of {jobid} with a waittime of {waittime}").format(jobid=jobid,
                                                                                                waittime=waittime))
         status = None
-        while (not JobExecutionStatus.isEnded(status)):
-            status = self.get_execution_status(jobid, timeout=timeout)
-            if (waittime >= 0) and (time.time() > time_limit):
-                raise DOcloudInterruptedException(_("Timeout after {0}").format(waittime), jobid=jobid)
-            # if the status is ended, don't need to wait
-            if (not JobExecutionStatus.isEnded(status)) and (nice_sec > 0):
-                time.sleep(nice_sec)  # sleep to be nice
+        try:
+            while (not JobExecutionStatus.isEnded(status)):
+                info = self.get_job(jobid, timeout=timeout)
+                if info_cb:
+                    info_cb(info)
+                status = JobExecutionStatus[info['executionStatus']]
+                if (waittime >= 0) and (time.time() > time_limit):
+                    raise DOcloudInterruptedException(_("Timeout after {0}").format(waittime), jobid=jobid)
+                # if the status is ended, don't need to wait
+                if (not JobExecutionStatus.isEnded(status)) and (nice_sec > 0):
+                    time.sleep(nice_sec)  # sleep to be nice
+                # down load logs if needed
+                if log_file and continuous_logs:
+                    last_seqid = download_and_format_log_items(self, jobid,
+                                                               last_seqid,
+                                                               log_file)
+            # at the end of the loop, we want to download the last chunk of logs
+            if log_file:
+                last_seqid = download_and_format_log_items(self, jobid,
+                                                           last_seqid,
+                                                           log_file)
+        finally:
+            if my_log_file:
+                my_log_file.close()
         return status
