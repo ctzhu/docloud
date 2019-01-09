@@ -7,7 +7,7 @@ from io import BytesIO
 import os
 
 import six
-from six import iteritems
+from six import iteritems, string_types
 
 import requests
 
@@ -22,31 +22,31 @@ class JobAttachmentInfo(object):
     - filename: contains the local filename for the attachment.
     - data: contains raw data.
     - file: contains a file where to read the data.
-    
+
     Only one of 'filename', 'data' or 'file' can be specified.
-    
+
     Example: ``{ 'name' : 'diet.lp' , 'filename' : 'data/models/diet.lp' }``
-    
-      
+
+
     Args:
         att_info: a ``dict`` containing job attachment info.
-        file: if ``att_info`` contains only the 'name' attribute, the file 
+        file: if ``att_info`` contains only the 'name' attribute, the file
             object containing the data to be read.
         data: if ``att_info`` contains only the 'name' attribute, the data for
             this attachment.
         filename: if ``att_info`` contains only the 'name' attribute, the name
             of the file to be read.
-        
+
     Raises:
         ParameterError -- if more than one of file, filename or data are specified
-    
+
     """
-    
+
     def __init__(self, att_info, file=None, data=None, filename=None):
         """ Creates a new attachment info.
-        
+
         Only one of filename, data or file can be used at a time.
-        
+
         Args:
             att_info: a ``dict`` containing job attachment info.
             file: if ``att_info`` contains only the 'name' attribute, the file 
@@ -55,10 +55,10 @@ class JobAttachmentInfo(object):
                 this attachment.
             filename: if ``att_info`` contains only the 'name' attribute, the name
                 of the file to be read.
-            
+
         Raises:
             ParameterError -- if more than one of file, filename or data are specified.
-               
+
         """
         self.file = file
         self.filename = filename
@@ -72,38 +72,36 @@ class JobAttachmentInfo(object):
                 basename = os.path.basename(att_info)
                 self.name = basename
                 self.filename = att_info
-        # Check that this is well constructed and that only one of file, data 
+        # Check that this is well constructed and that only one of file, data
         # or filename is set
         notNone = int(self.file is not None) + int(self.data is not None) \
             + int(self.filename is not None)
         if (notNone != 1):
             raise ParameterError("JobClient.uploadAttachment() needs one of"
                                  " (data, file, filename) parameters")
-        
-       
-    
+
     def __build_from_dict(self, obj):
         # parse the obj as a dict for attachment file, filename or data
         self.name = obj['name']
         dict_file = obj.get('file', None)
         if (dict_file is not None):
-            self.file = dict_file    
+            self.file = dict_file
         dict_filename = obj.get('filename', None)
         if (dict_filename is not None):
-            self.filename = dict_filename          
+            self.filename = dict_filename
         dict_data = obj.get('data', None)
         if (dict_data is not None):
             self.data = dict_data
-        
+
     def get_data(self):
         """ Returns the data for this attachment.
-        
+
         If attachment data was specified as raw data, return the raw data.
         Otherwise if attachment file was specified, call ``read()`` on the file and
         return the data.
         Finally, if attachment filename was specified, open the file, read and
         return the data.
-        
+
         Returns:
             The data as a byte array.
         """
@@ -114,11 +112,11 @@ class JobAttachmentInfo(object):
         if self.file is not None:
             data = self.file.read()
         return data
-    
+
     def _get_data_or_file(self):
         """Returns the data for this attachment, or the file like object if
         it is a file like object.
-        
+
         Returns:
             is_data, data_or_file -- ``is_data`` is a boolean indicating if 
                 ``data_or_file`` is a data block.
@@ -158,25 +156,25 @@ class JobAttachmentInfo(object):
         else:
             return data_or_file
 
-        
     def close_file(self):
         """Close any file that this attachment info has opened.
         """
         if self._my_file is not None:
             self._my_file.close()
             self._my_file = None
-            
-            
-  
-            
+
+
 class JobResponse(object):
     """ The response for a job execution request.
-    
+
     Attributes:
         jobid: The job id.
         execution_status: The execution status of the job.
-        solution: The solution of the job as a ``dict``, if it has been read.
-        job_info: A ``dict`` containing information on the job. 
+        solution: The solution of the job, if it has been read. The solution
+            is the output attachment which name is ``solution.ext``, where
+            ext is the extension for the output result format ('TEXT', 'XML',
+            'JSON', 'XLSX')
+        job_info: A ``dict`` containing information on the job.
     """
     def __init__(self, jobid, executionStatus=None):
         self.jobid = jobid
@@ -184,27 +182,28 @@ class JobResponse(object):
         self.solution = None
         self.job_info = None
 
-    
-
 
 class DOcloudException(Exception):
     """ The base class for exceptions raised by the DOcloud client."""
     def __init__(self, msg):
         Exception.__init__(self, msg)
         self.message = msg
-        
+
+
 class JobUploadError(DOcloudException):
     """ The error raised when an upload operation failed."""
     def __init__(self, msg):
         Exception.__init__(self, msg)
         self.message = msg
-        
+
+
 class ParameterError(DOcloudException):
     """ The error raised when a wrong parameter was passed to the API."""
     def __init__(self, msg):
         Exception.__init__(self, msg)
         self.message = msg
-        
+
+
 class DOcloudForbiddenError(DOcloudException):
     """ The error raised when the service cannot be used because of
     autorisation issues.
@@ -212,7 +211,8 @@ class DOcloudForbiddenError(DOcloudException):
     def __init__(self, msg):
         Exception.__init__(self, msg)
         self.message = msg
-        
+
+
 class DOcloudNotFoundError(DOcloudException):
     """ The error raised when an operation was requested on a non-existent
     resource.
@@ -222,10 +222,11 @@ class DOcloudNotFoundError(DOcloudException):
             else "url={url}, message={msg}".format(url=url, msg=msg)
         Exception.__init__(self, message)
         self.message = message
-        
+
+
 class DOcloudInterruptedException(DOcloudException):
     """ The exception raised when an operation timed out.
-    
+
     Attributes:
         message: The error message.
         jobid: The id of the job.
@@ -235,9 +236,6 @@ class DOcloudInterruptedException(DOcloudException):
         self.message = msg
         self.jobid = jobid
 
-
-
- 
 
 class JobClient(object):
     """A client to create, submit and monitor jobs on DOcloud.
@@ -441,6 +439,24 @@ class JobClient(object):
 
         return jobid
 
+    def prepare_results_format_parameter_from_output_spec(self, output=None, parameters=None):
+        # If ``output`` specification needs a result format parameter change,
+        #    return the new parameters.
+        #    Else return ``parameters``
+        if output and isinstance(output, string_types):
+            o = output
+            extension = os.path.splitext(o)[1][1:].upper()
+            is_ext_supported = extension in ['TEXT', 'XML', 'JSON', 'XLSX']
+            is_resultsFormat_defined = parameters is not None and 'oaas.resultsFormat' in parameters
+            # if output format was not specified in oaas.resultFormat,
+            # set it depending on extension of output file
+            if is_ext_supported and not is_resultsFormat_defined:
+                if parameters is None:
+                    parameters = {}
+                else:
+                    parameters = parameters.copy()
+                parameters['oaas.resultsFormat'] = extension
+        return parameters
 
     def execute(self, input=None, output=None, load_solution=False, log=None,
                 delete_on_completion=True, timeout=None, waittime=-1,
@@ -452,14 +468,43 @@ class JobClient(object):
         After the execution has ended, job outputs and logs can be
         automatically downloaded.
 
+        ``output`` can be:
+            - a string representing a filename: after solve, the output
+                attachment of name ``solution.extension`` is saved to that
+                filename. ``extension`` is the extension of the filename.
+                Extension must be one of the supported extensions of the solve
+                engine ('TEXT', 'XML', 'JSON', 'XLSX').
+
+                Example:
+
+                    ``output="output.xlsx"`` forces the result format to be
+                    xlsx and download ``solution.xlsx`` output attachment
+                    after the solve.
+
+            - a dict mapping attachment name to filenames.
+
+                Example::
+
+                    output= { 'output.json': 'file_output.json',
+                              'output.csv' : 'file_output.csv' }
+
+                After the solve, download output attachment of name
+                ``output.json`` to local file ``file_output.json`` and
+                ``output.csv`` to local file ``file_output.csv``
+
         Args:
             input: List of attachments. Each attachment is a ``dict`` specifying
                 attachment name and attachment data, file or filename.
             timeout: The timeout for requests.
-            output: The filename where to save job output.
+            output: The filename where to save job output or a mapping between
+                output attachment names and local filenames to download
+                attachments.
             load_solution: If True, the solution is loaded from the service
                 once the solve has finished and returned in the job response
-                object.
+                object. If multiple output attachments are
+                available, the ``solution`` field of the response contains
+                the output attachment which name is ``solution.extension`` where
+                ``extension`` is the output format extension.
             log: The filename where to save job logs.
             delete_on_completion: If set, the job is deleted after it is
                 completed.
@@ -475,24 +520,31 @@ class JobClient(object):
             DOcloudInterruptedException: if the maximum time to wait
                 has elapsed and the job has not solved yet.
         """
+        output_solution_filename = None
+        if output and isinstance(output, string_types):
+            output_solution_filename = output
         # check output format
         solution_attachment_ext = "json"  # default !
-        if output is not None:
-            o = output
-            extension = os.path.splitext(o)[1][1:].upper()
-            is_ext_supported = extension in ['TEXT', 'XML', 'JSON', 'XLSX']
-            is_resultsFormat_defined = parameters is not None and 'oaas.resultsFormat' in parameters
-            if is_ext_supported and not is_resultsFormat_defined:
-                if parameters is None:
-                    parameters = {}
-                else:
-                    parameters = parameters.copy()
-                parameters['oaas.resultsFormat'] = extension
+        parameters = self.prepare_results_format_parameter_from_output_spec(output=output,
+                                                                            parameters=parameters)
         if parameters is not None:
             if 'oaas.resultsFormat' in parameters:
                 solution_attachment_ext = parameters['oaas.resultsFormat'].lower()
 
+        # This is the name of the default solution output attachment for
+        # solver engines. Might be different for workers that publish multiple
+        # outputs
         solution_att_name = "solution.%s" % solution_attachment_ext
+
+        # Create output mapping
+        output_mapping = {}
+        if output and isinstance(output, string_types):
+            # save solution_att_name as output_solution_filename
+            output_mapping[solution_att_name] = output_solution_filename
+        if isinstance(output, dict):
+            # assume output maps (attribute name -> filename)
+            output_mapping = output
+
         # submit job
         jobid = self.submit(input=input, timeout=timeout, gzip=gzip,
                             parameters=parameters)
@@ -515,24 +567,34 @@ class JobClient(object):
             response.job_info = self.get_job(jobid)
             attachments = response.job_info['attachments']
             has_solution = False
+            solution = None
             for a in attachments:
-                if a["type"] == "OUTPUT_ATTACHMENT" and a["name"] == solution_att_name:
-                    has_solution = True
+                if a["type"] == "OUTPUT_ATTACHMENT":
+                    output_data = None # downloaded output data for this attachment
+                    if a["name"] in output_mapping:
+                        output_data = self.download_job_attachment(jobid,
+                                                                   a["name"])
+                        with open(output_mapping[a["name"]], "wb") as f:
+                            f.write(output_data)
+                    if a["name"] == solution_att_name:
+                        has_solution = True
+                        solution = output_data
             # download log
             if (log is not None):
                 with open(log, "wb") as f:
                     logs = self.download_job_log(jobid)
                     f.write(logs)
             # download solution
+            """
             solution = None
             if status is not JobExecutionStatus.FAILED and has_solution:
-                if output is not None or load_solution:
+                if output_solution_filename is not None or load_solution:
                     solution = self.download_job_attachment(jobid,
                                                             solution_att_name)
-                if output is not None:
+                if output_solution_filename is not None:
                     with open(output, "wb") as f:
                         f.write(solution)
-
+            """
             if load_solution:
                 response.solution = solution
         finally:
@@ -683,11 +745,11 @@ class JobClient(object):
         Returns:
             The id of the copy.
         """
-        override_data = json.dumps(kwargs)        
+        override_data = json.dumps(kwargs)
         execute_option = ""
         if execute is not None:
             execute_option = "?execute={0!s}".format(JobClient.BOOLEAN_VALUES_FOR_URL[execute])
-        
+
         url = '{base_url}/jobs/{jobid}/recreate{execute}'.format(base_url=self.url,
                                                                  jobid=jobid,
                                                                  execute=execute_option)
@@ -701,30 +763,30 @@ class JobClient(object):
 
     def abort_job(self, jobid, timeout=None):
         """ Aborts the specified job.
-        
+
         Args:
-             jobid: The id of the job.   
-            timeout: The timeout for requests.  
+             jobid: The id of the job.
+            timeout: The timeout for requests.
         """
         url = '{base_url}/jobs/{jobid}/execute'.format(base_url=self.url, 
                                                        jobid=jobid)
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
-    
-    
+
+
     def create_job_attachment(self, jobid, attachment_creation_data, timeout=None):
         """ Creates an attachment for the job which id is specified.
-        
+
         Attachment creation data is a ``dict`` which can contain the following keys:
-        
+
         - name: The name of the attachment.
         - length: The length of the attachment. (Optional)
-        
+
         Args:    
             jobid: The id of the job.
             attachment_creation_data: Attachment creation data
             timeout: The timeout for requests. 
-        
+
         Returns:
             The attribute id.
         """
@@ -740,7 +802,7 @@ class JobClient(object):
 
     def delete_all_jobs(self, timeout=None):
         """ Deletes all jobs for the user. 
-        
+
         Args:
             timeout: The timeout for requests. 
         """
@@ -1102,6 +1164,10 @@ class JobClient(object):
 
         If ``nice`` is specified, this method will wait for that amount of
         seconds between each execution status query.
+
+        When the job has multiple output attachment, only the one which name
+        is ``solution.ext`` (with ``ext`` in: 'TEXT', 'XML', 'JSON', 'XLSX')
+        is downloaded.
 
         Args:
             jobid: The id of the job.
