@@ -380,6 +380,9 @@ class JobClient(object):
         self.requests_options = dict()
         if proxies is not None:
             self.requests_options['proxies'] = proxies
+        self.retry_on_status = {502}  # on 502, retry
+        self.retry_count = 3  # retry 3 times
+        self.retry_wait = 2  # wait time between retries
 
     def __enter__(self):
         return self
@@ -429,76 +432,64 @@ class JobClient(object):
         """ Checks if the response is 204 No Content."""
         return self._check_status(response, [204])
 
-    def _post(self, url, data=None, timeout=None):
+    def _request(self, method, url, timeout=None, *args, **kwargs):
         tm_sec = self.timeout if timeout is None else timeout
-        if self.rest_callback:
-            self.rest_callback("post", url,
-                               data=data,
-                               headers=self._base_headers,
-                               verify=self.verify,
-                               timeout=tm_sec,
-                               **self.requests_options)
-        response = self.session.post(url,
-                                     data=data,
-                                     headers=self._base_headers,
-                                     verify=self.verify,
-                                     timeout=tm_sec,
-                                     **self.requests_options)
+        retry_count = self.retry_count
+        response = None
+        while retry_count > 0:
+            if self.rest_callback:
+                self.rest_callback(method, url,
+                                   timeout=tm_sec,
+                                   *args,
+                                   **kwargs)
+            response = self.session.request(method, url,
+                                            timeout=tm_sec,
+                                            *args,
+                                            **kwargs)
+            if response.status_code in self.retry_on_status:
+                retry_count = retry_count - 1
+                if self.retry_wait:
+                    time.sleep(self.retry_wait)
+            else:
+                return response
         return response
+
+    def _post(self, url, data=None, timeout=None):
+        return self._request('POST', url,
+                             data=data,
+                             headers=self._base_headers,
+                             verify=self.verify,
+                             timeout=timeout,
+                             **self.requests_options)
 
     def _get(self, url, timeout=None, stream=False):
-        tm_sec = self.timeout if timeout is None else timeout
-        if self.rest_callback:
-            self.rest_callback("get", url,
-                               headers=self._base_headers,
-                               verify=self.verify,
-                               timeout=tm_sec,
-                               stream=stream,
-                               **self.requests_options)
-        response = self.session.get(url,
-                                    headers=self._base_headers,
-                                    verify=self.verify,
-                                    timeout=tm_sec,
-                                    stream=stream,
-                                     **self.requests_options)
-        return response
+        return self._request('GET',
+                             url,
+                             headers=self._base_headers,
+                             verify=self.verify,
+                             timeout=timeout,
+                             stream=stream,
+                             **self.requests_options)
 
     def _delete(self, url, timeout=None):
-        tm_sec = self.timeout if timeout is None else timeout
-        if self.rest_callback:
-            self.rest_callback("delete", url,
-                               headers=self._base_headers,
-                               verify=self.verify,
-                               timeout=tm_sec,
-                               **self.requests_options)
-        response = self.session.delete(url,
-                                       headers=self._base_headers,
-                                       verify=self.verify,
-                                       timeout=tm_sec,
-                                       **self.requests_options)
-        return response
+        return self._request('DELETE', url,
+                             headers=self._base_headers,
+                             verify=self.verify,
+                             timeout=timeout,
+                             **self.requests_options)
 
     def _put(self, url, data=None, timeout=None, gzip=False):
-        tm_sec = self.timeout if timeout is None else timeout
         headers = self._stream_headers
         if gzip:
             headers = self._gz_stream_headers
         # do not use self._base_headers here, but _stream_headers since
         # self._base_headers defines Content-Type: application/json
-        if self.rest_callback:
-            self.rest_callback("put", url,
-                               data=data,
-                               headers=headers,
-                               verify=self.verify,
-                               timeout=tm_sec,
-                               **self.requests_options)
-        response = self.session.put(url,
-                                    data=data,
-                                    headers=headers,
-                                    verify=self.verify,
-                                    timeout=tm_sec,
-                                    **self.requests_options)
-        return response
+        return self._request('PUT', url,
+                             data=data,
+                             headers=headers,
+                             verify=self.verify,
+                             timeout=timeout,
+                             **self.requests_options)
 
     def close(self):
         """ Closes this client and free up used resources.
