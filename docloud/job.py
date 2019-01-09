@@ -420,18 +420,18 @@ class JobClient(object):
         self.execute_job(jobid)
         
         return jobid
-            
-    
+
+
     def execute(self, input=None, output=None, load_solution=False, log=None,
                 delete_on_completion=True, timeout=None, waittime=-1,
                 gzip=False, parameters=None):
         """Submit and monitor a job execution.
-        
+
         Submits a job and waits for the execution to end.
         Attachments are uploaded prior to the execution.
         After the execution has ended, job outputs and logs can be
         automatically downloaded.
-        
+
         Args:
             input: List of attachments. Each attachment is a ``dict`` specifying
                 attachment name and attachment data, file or filename.
@@ -447,22 +447,40 @@ class JobClient(object):
             gzip: If True, the input data is compressed using gzip before
                 it is uploaded.
             parameters: A ``dict`` with additional job parameters. 
-        
+
         Returns:
             A ``JobResponse`` with the execution status of the job.
-            
+
         Raises:
             DOcloudInterruptedException: if the maximum time to wait
                 has elapsed and the job has not solved yet.
         """
+        # check output format
+        solution_attachment_ext = "json"  # default !
+        if output is not None:
+            o = output
+            extension = os.path.splitext(o)[1][1:].upper()
+            is_ext_supported = extension in ['TEXT', 'XML', 'JSON', 'XLSX']
+            is_resultsFormat_defined = parameters is not None and 'oaas.resultsFormat' in parameters
+            if is_ext_supported and not is_resultsFormat_defined:
+                if parameters is None:
+                    parameters = {}
+                else:
+                    parameters = parameters.copy()
+                parameters['oaas.resultsFormat'] = extension
+        if parameters is not None:
+            if 'oaas.resultsFormat' in parameters:
+                solution_attachment_ext = parameters['oaas.resultsFormat'].lower()
+
+        # submit job
         jobid = self.submit(input=input, timeout=timeout, gzip=gzip,
                             parameters=parameters)
         response = None
         completed = False
         try:
             # monitor job execution
-            status = self.wait_for_completion(jobid, 
-                                              timeout=timeout, 
+            status = self.wait_for_completion(jobid,
+                                              timeout=timeout,
                                               waittime=waittime)
             # if waittime or timeout elapsed without this finishing,
             # an interruption exception should have been raised at this point.
@@ -474,29 +492,31 @@ class JobClient(object):
 
             # download log
             if (log is not None):
-                with open(log,"wb") as f:
+                with open(log, "wb") as f:
                     logs = self.download_job_log(jobid)
-                    f.write(logs)     
+                    f.write(logs)
             # download solution
             solution = None
             if status is not JobExecutionStatus.FAILED:
                 if output is not None or load_solution:
-                    solution = self.download_job_attachment(jobid, "solution.json")
+                    solution_att_name = "solution.%s" % solution_attachment_ext
+                    solution = self.download_job_attachment(jobid,
+                                                            solution_att_name)
                 if output is not None:
-                    with open(output,"wb") as f:
-                        f.write(solution)    
+                    with open(output, "wb") as f:
+                        f.write(solution)
 
             # get some job info
             response.job_info = self.get_job(jobid)
             if load_solution:
-                response.solution = solution     
-        finally:    
+                response.solution = solution
+        finally:
             # delete on completion if completed
             if delete_on_completion and completed:
                 self.delete_job(jobid, timeout=timeout)
         return response
 
-    
+
     def create_job(self, **kwargs):
         """ Creates a new job.
         
