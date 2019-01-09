@@ -2,3 +2,4 @@ include docloud/*.py
 include setup.cfg
 include setup.py
 recursive-include docloud/locale *.mo
+include LICENSE.txt
