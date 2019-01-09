@@ -152,7 +152,9 @@ class JobAttachmentInfo(object):
                     f.write(data_or_file)
                 else:
                     f.write(data_or_file.read())
-            return data.getvalue()
+            # reset position so that read() will return the contents
+            data.seek(0)
+            return data
         else:
             return data_or_file
 
@@ -472,6 +474,7 @@ class JobClient(object):
             if 'oaas.resultsFormat' in parameters:
                 solution_attachment_ext = parameters['oaas.resultsFormat'].lower()
 
+        solution_att_name = "solution.%s" % solution_attachment_ext
         # submit job
         jobid = self.submit(input=input, timeout=timeout, gzip=gzip,
                             parameters=parameters)
@@ -487,9 +490,16 @@ class JobClient(object):
             # it's safe to assume that the job has completed when we reach
             # this point.
             completed = True
+
             # prepare return value
             response = JobResponse(jobid, executionStatus=status)
-
+            # get some job info
+            response.job_info = self.get_job(jobid)
+            attachments = response.job_info['attachments']
+            has_solution = False
+            for a in attachments:
+                if a["type"] == "OUTPUT_ATTACHMENT" and a["name"] == solution_att_name:
+                    has_solution = True
             # download log
             if (log is not None):
                 with open(log, "wb") as f:
@@ -497,17 +507,14 @@ class JobClient(object):
                     f.write(logs)
             # download solution
             solution = None
-            if status is not JobExecutionStatus.FAILED:
+            if status is not JobExecutionStatus.FAILED and has_solution:
                 if output is not None or load_solution:
-                    solution_att_name = "solution.%s" % solution_attachment_ext
                     solution = self.download_job_attachment(jobid,
                                                             solution_att_name)
                 if output is not None:
                     with open(output, "wb") as f:
                         f.write(solution)
 
-            # get some job info
-            response.job_info = self.get_job(jobid)
             if load_solution:
                 response.solution = solution
         finally:
