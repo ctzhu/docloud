@@ -1,26 +1,39 @@
 from docloud.status import JobExecutionStatus
 
 import json
-import time
+import gettext
 import gzip as gz
 from io import BytesIO
 import os
+import sys
+import time
+
+import requests
 
 import six
 from six import iteritems, string_types
 
-import requests
-
-import sys
 
 # initialize gettext
 localedir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "locale")
-import gettext
 translation = gettext.translation('docloud', localedir=localedir, fallback=True)
 if sys.version_info[0] == '2':
     _ = translation.ugettext
 else:
     _ = translation.gettext
+
+
+def default_solution_name(parameters):
+    # Returns the name of the default solution output attachment for
+    # solver engines. Might be different for workers that publish multiple
+    # outputs
+    solution_attachment_ext = "json"  # default
+    if parameters is not None:
+        if 'oaas.resultsFormat' in parameters:
+            solution_attachment_ext = parameters['oaas.resultsFormat'].lower()
+            if solution_attachment_ext == 'text':
+                solution_attachment_ext = 'txt'
+    return "solution.%s" % solution_attachment_ext
 
 
 class JobAttachmentInfo(object):
@@ -60,15 +73,16 @@ class JobAttachmentInfo(object):
 
         Args:
             att_info: a ``dict`` containing job attachment info.
-            file: if ``att_info`` contains only the 'name' attribute, the file 
+            file: if ``att_info`` contains only the 'name' attribute, the file
                 object containing the data to be read.
-            data: if ``att_info`` contains only the 'name' attribute, the data for
-                this attachment.
-            filename: if ``att_info`` contains only the 'name' attribute, the name
-                of the file to be read.
+            data: if ``att_info`` contains only the 'name' attribute, the data
+                for this attachment.
+            filename: if ``att_info`` contains only the 'name' attribute, the
+                name of the file to be read.
 
         Raises:
-            ParameterError -- if more than one of file, filename or data are specified.
+            ParameterError -- if more than one of file, filename or data are
+                specified.
 
         """
         self.file = file
@@ -246,10 +260,37 @@ class DOcloudInterruptedException(DOcloudException):
 class JobClient(object):
     """A client to create, submit and monitor jobs on DOcplexcloud.
 
+    Examples:
+
+        Submits a model as `.mod`, with data as a `.dat` file, then after
+        the solve, the results is downloaded and saved as `results.json`::
+
+            >>> client = JobClient(url, api_key)
+            >>> resp = client.execute(input=["models/truck.dat",
+                                             "models/truck.mod"],
+                                    output="results.json")
+
+        Submits a model which definition is first read in memory, then
+        download results as `results.json`. Additionnaly, solve log is
+        downloaded as `solver.log`. Data is sent gzipped. Wait for the job
+        for 300 seconds. Once the solve is finished or if the wait time is
+        elapsed, the job is deleted::
+
+            >>> client = JobClient(url, api_key)
+            >>> with open("models/truck.mod", "rb") as modFile:
+            >>>     resp = client.execute(input=[{"name":"truck.mod",
+                                                  "file":modFile},
+                                                  "models/truck.dat"],
+                                          output="results.json",
+                                          log="solver.log",
+                                          gzip=True,
+                                          waittime=300,
+                                          delete_on_completion=True)
+
     Attributes:
         url(str): The URL this client connects to.
         timeout(float): The timeout used when listening on sockets. The timeout
-             is specified in seconds.
+            is specified in seconds.
         verify(bool): Verifies SSL certificates for HTTPS requests.
         logger(Logger): A logger you can set if you want more verbose information.
         nice(float): When greater than zero, specifies a time in seconds between
@@ -261,9 +302,9 @@ class JobClient(object):
 
     BOOLEAN_VALUES_FOR_URL = {True: 'true', False: 'false'}
 
-    def __init__(self, url, api_key, client_secret=None, 
+    def __init__(self, url, api_key, client_secret=None,
                  proxies=None, max_retries=1):
-        """Inits JobClient.
+        """ Initialize a JobClient.
 
         Args:
             url (str): The URL to connect to.
@@ -337,7 +378,7 @@ class JobClient(object):
                 else:
                     message = str(j)
             except ValueError:
-                message = str(response)
+                message = response.content
             if response.status_code == 403:
                 raise DOcloudForbiddenError(message)
             elif response.status_code == 404:
@@ -444,6 +485,7 @@ class JobClient(object):
                 filename.
             timeout: The timeout for requests.
             parameters: A ``dict`` with additional job parameters.
+                See `Job Parameters <https://developer.ibm.com/docloud/documentation/docloud/job-parameters/>`_.
 
         Returns:
             The id of the job created.
@@ -466,7 +508,7 @@ class JobClient(object):
         if output and isinstance(output, string_types):
             o = output
             extension = os.path.splitext(o)[1][1:].upper()
-            is_ext_supported = extension in ['TEXT', 'XML', 'JSON', 'XLSX']
+            is_ext_supported = extension in ['TEXT', 'TXT', 'XML', 'JSON', 'XLSX']
             is_resultsFormat_defined = parameters is not None and 'oaas.resultsFormat' in parameters
             # if output format was not specified in oaas.resultFormat,
             # set it depending on extension of output file
@@ -476,6 +518,8 @@ class JobClient(object):
                 else:
                     parameters = parameters.copy()
                 parameters['oaas.resultsFormat'] = extension
+                if extension == 'TXT':
+                    parameters['oaas.resultsFormat'] = 'TEXT'
         return parameters
 
     def execute(self, input=None, output=None, load_solution=False, log=None,
@@ -493,7 +537,8 @@ class JobClient(object):
                 attachment of name ``solution.extension`` is saved to that
                 filename. ``extension`` is the extension of the filename.
                 Extension must be one of the supported extensions of the solve
-                engine ('TEXT', 'XML', 'JSON', 'XLSX').
+                engine ('TXT' if oaas.outputFormat is 'TEXT', 'XML', 'JSON',
+                'XLSX').
 
                 Example:
 
@@ -531,7 +576,8 @@ class JobClient(object):
             waittime: The maximum time to wait.
             gzip: If True, the input data is compressed using gzip before
                 it is uploaded.
-            parameters: A ``dict`` with additional job parameters. 
+            parameters: A ``dict`` with additional job parameters.
+                See `Job Parameters <https://developer.ibm.com/docloud/documentation/docloud/job-parameters/>`_.
 
         Returns:
             A ``JobResponse`` with the execution status of the job.
@@ -544,17 +590,9 @@ class JobClient(object):
         if output and isinstance(output, string_types):
             output_solution_filename = output
         # check output format
-        solution_attachment_ext = "json"  # default !
         parameters = self.prepare_results_format_parameter_from_output_spec(output=output,
                                                                             parameters=parameters)
-        if parameters is not None:
-            if 'oaas.resultsFormat' in parameters:
-                solution_attachment_ext = parameters['oaas.resultsFormat'].lower()
-
-        # This is the name of the default solution output attachment for
-        # solver engines. Might be different for workers that publish multiple
-        # outputs
-        solution_att_name = "solution.%s" % solution_attachment_ext
+        solution_att_name = default_solution_name(parameters)
 
         # Create output mapping
         output_mapping = {}
@@ -630,15 +668,8 @@ class JobClient(object):
     def create_job(self, **kwargs):
         """ Creates a new job.
 
-        The job parameter is a dict containing various job and system
-        parameters. Those parameters include:
-
-        - oaas.timeLimit
-        - oaas.logLimit
-        - oaas.oplRunConfig
-        - oaas.resultsFormat
-        - oaas.webhook
-        - oaas.dropsolve
+        The job parameters parameter is a dict containing various job and system
+        parameters. See `Job Parameters <https://developer.ibm.com/docloud/documentation/docloud/job-parameters/>`_.
 
         Attachment definitions are ``dict`` containing info. Such ``dict`` can
         include the following key/values pair:
@@ -661,6 +692,7 @@ class JobClient(object):
                 args are overridden. Attachments specified by ``input`` are
                 automatically uploaded at job creation time.
             parameters (optional): A ``dict`` containing job parameters.
+                See `Job Parameters <https://developer.ibm.com/docloud/documentation/docloud/job-parameters/>`_.
             attachments (optional): A list of ``dict`` containing attachment
                 definitions.
             clientName (optional): The name of the client.
@@ -1202,7 +1234,8 @@ class JobClient(object):
         response = JobResponse(jobid, executionStatus=status)
         # get some job info
         response.job_info = self.get_job(jobid)
-        solution_att_name = "solution.json"
+        parameters = response.job_info.get('parameters')
+        solution_att_name = default_solution_name(parameters)
         attachments = response.job_info['attachments']
         has_solution = False
         for a in attachments:
