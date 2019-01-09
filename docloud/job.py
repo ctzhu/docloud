@@ -257,24 +257,36 @@ class JobClient(object):
         
     BOOLEAN_VALUES_FOR_URL = {True: 'true', False: 'false'}
     
-    def __init__(self, url, api_key):
+    def __init__(self, url, api_key, client_secret=None, max_retries=1):
         """Inits JobClient.
         
         Args:
             url (str): The URL to connect to.
-            api_key (str): The DOcloud API key to use.
-        
+            api_key (str): The API key.
+            client_secret (str): The client secret of the API key.
         """
         self.url = url
         self.api_key = api_key
-        self._base_auth = {'X-IBM-Client-Id': api_key}
-        self._base_headers = {'X-IBM-Client-Id': api_key, 
-                              'Content-Type': 'application/json'}   
-        self._stream_headers = {'X-IBM-Client-Id': api_key, 
-                                'Content-Type': 'application/octet-stream'}  
-        self._gz_stream_headers = {'X-IBM-Client-Id': api_key, 
-                                   'Content-Type': 'application/octet-stream',
-                                   'Content-Encoding': 'gzip'}         
+        self.client_secret = client_secret
+        # Create session
+        self.session = requests.Session()
+        # mount custom adapters for http and https for this session
+        self.session.mount("http://",
+                           requests.adapters.HTTPAdapter(max_retries=max_retries))
+        self.session.mount("https://",
+                           requests.adapters.HTTPAdapter(max_retries=max_retries))
+        self.session.headers.update({'X-IBM-Client-Id': api_key})
+        if self.client_secret is not None:
+            self.session.headers.update({'X-IBM-Client-Secret': client_secret})
+        # headers used for control messages
+        self._base_headers = {}
+        self._base_headers['Content-Type'] = 'application/json'
+        # headers used to send streams
+        self._stream_headers = {}
+        self._stream_headers['Content-Type'] = 'application/octet-stream'
+        # headers used to send gzipped streams
+        self._gz_stream_headers = self._stream_headers.copy()
+        self._gz_stream_headers['Content-Encoding'] = 'gzip'
         # change that value to change timeout
         self.timeout = JobClient.DEFAULT_TIMEOUT
         # set to a not None value if you want logging
@@ -287,6 +299,12 @@ class JobClient(object):
         self.rest_callback = None
         
         
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        
     def _info(self, *args, **kwargs):
         if (self.logger is not None):
             self.logger.info(*args, **kwargs)
@@ -297,9 +315,17 @@ class JobClient(object):
         if not (response.status_code in ok_status):
             try:
                 j = response.json()
-                # not used: xclass = j["exclass"]
-                # not used: code = j["code"]
-                message = j["message"]
+                if "message" in j:
+                    message = j["message"]
+                elif "httpMessage" in j:
+                    http_message = j["httpMessage"]
+                    more_info = j.get("moreInformation", "")
+                    if more_info != "":
+                        more_info = "({0})".format(more_info)
+                    http_code = j.get("httpCode", "")
+                    message = "{0} {1} {2}".format(http_code, http_message, more_info)
+                else:
+                    message = str(j)
             except ValueError:
                 message = str(response)
             if response.status_code == 403:
@@ -330,26 +356,26 @@ class JobClient(object):
                                headers=self._base_headers,
                                verify=self.verify,
                                timeout=tm_sec)
-        response = requests.post(url, 
-                                 data=data,
-                                 headers=self._base_headers, 
-                                 verify=self.verify,
-                                 timeout=tm_sec)
+        response = self.session.post(url, 
+                                     data=data,
+                                     headers=self._base_headers, 
+                                     verify=self.verify,
+                                     timeout=tm_sec)
         return response
     
     def _get(self, url,timeout=None,stream=False):
         tm_sec = self.timeout if timeout is None else timeout
-        if self.rest_callback:
+        if self.rest_callback: 
             self.rest_callback("get", url,
                                headers=self._base_headers,
                                verify=self.verify,
                                timeout=tm_sec,
                                stream=stream)
-        response = requests.get(url,
-                                headers=self._base_headers, 
-                                verify=self.verify, 
-                                timeout=tm_sec,
-                                stream=stream)
+        response = self.session.get(url,
+                                    headers=self._base_headers, 
+                                    verify=self.verify, 
+                                    timeout=tm_sec,
+                                    stream=stream)
         return response
     
     def _delete(self, url,timeout=None):
@@ -359,10 +385,10 @@ class JobClient(object):
                                headers=self._base_headers,
                                verify=self.verify,
                                timeout=tm_sec)
-        response = requests.delete(url, 
-                                   headers=self._base_headers, 
-                                   verify=self.verify,
-                                   timeout=tm_sec)
+        response = self.session.delete(url, 
+                                       headers=self._base_headers, 
+                                       verify=self.verify,
+                                       timeout=tm_sec)
         return response
     
     def _put(self, url, data=None, timeout=None, gzip=False):
@@ -370,7 +396,7 @@ class JobClient(object):
         headers = self._stream_headers
         if gzip:
             headers = self._gz_stream_headers
-        # do not use self._base_headers here, but _base_auth since
+        # do not use self._base_headers here, but _stream_headers since
         # self._base_headers defines Content-Type: application/json
         if self.rest_callback:
             self.rest_callback("put", url,
@@ -378,49 +404,41 @@ class JobClient(object):
                                headers=headers,
                                verify=self.verify,
                                timeout=tm_sec)
-        response = requests.put(url, 
-                                data=data,
-                                headers=headers,
-                                verify=self.verify, 
-                                timeout=tm_sec)
+        response = self.session.put(url, 
+                                    data=data,
+                                    headers=headers,
+                                    verify=self.verify, 
+                                    timeout=tm_sec)
         return response
-    
+        
+    def close(self):
+        """ Closes this client and free up used resources.
+        """
+        self.session.close()
+
     def submit(self, input=None, timeout=None, gzip=False, parameters=None):
         """ Submits a job.
-        
+
         Submits a job but does not wait for the execution to end.
         Attachments are uploaded prior to the execution.
-        
+
         Args:
-            input: List of attachments. Each attachment is a ``dict`` specifying
-                attachment name and attachment data, file or filename.
+            input: List of attachments. Each attachment is a ``dict``
+                specifying attachment name and attachment data, file or
+                filename.
             timeout: The timeout for requests.
-            parameters: A ``dict`` with additional job parameters. 
+            parameters: A ``dict`` with additional job parameters.
 
         Returns:
             The id of the job created.
         """
-        
-        # create job & attachment
-        attachmentInfo = []
-        for raw_inp in input:
-            attachmentInfo.append(JobAttachmentInfo(raw_inp))
-        
-        attachments = [{'name': a.name} for a in attachmentInfo]
-        
-        jobid = self.create_job(attachments=attachments,
+        jobid = self.create_job(input=input,
+                                gzip=gzip,
+                                timeout=timeout,
                                 parameters=parameters)
-        
-        # upload attachments
-        for inp in attachmentInfo:
-            self.upload_job_attachment(jobid, 
-                                       attid=inp.name,
-                                       data=inp.get_data(),
-                                       gzip=gzip)
-        
         # run model
-        self.execute_job(jobid)
-        
+        self.execute_job(jobid, timeout=timeout)
+
         return jobid
 
 
@@ -526,43 +544,51 @@ class JobClient(object):
 
     def create_job(self, **kwargs):
         """ Creates a new job.
-        
+
         The job parameter is a dict containing various job and system
         parameters. Those parameters include:
-        
+
         - oaas.timeLimit
         - oaas.logLimit
         - oaas.oplRunConfig
         - oaas.resultsFormat
         - oaas.webhook
         - oaas.dropsolve
-        
-        Attachment definitions are ``dict`` containing info. Such ``dict`` can include
-        the following key/values pair:
-        
+
+        Attachment definitions are ``dict`` containing info. Such ``dict`` can
+        include the following key/values pair:
+
         - name (string): The name of the attachment.
         - length (int): The length of the attachment.
-        
+
         Example:
-        
+
             Creates a job with one attachment called 'diet.lp'
-            
+
             >>> jobid = client.create_job(attachments=[{'name' : 'diet.lp'}])
-            
+
         Args:
             applicationId (optional): The application id.
             applicationVersion (optional): The application version.
+            input (optional): List of attachments. Each attachment is a
+                ``dict`` specifying attachment name and attachment data, file
+                or filename. When ``input`` is specified, any ``attachments``
+                args are overridden. Attachments specified by ``input`` are
+                automatically uploaded at job creation time.
             parameters (optional): A ``dict`` containing job parameters.
             attachments (optional): A list of ``dict`` containing attachment
-                definitions.              
+                definitions.
             clientName (optional): The name of the client.
-            
+
         Note:
             The ``kwargs`` are JSON encoded and passed to the DOcloud service.
-                
+
         Returns:
             The jobid.
         """
+        input = kwargs.pop('input', None)
+        gzip = kwargs.pop('gzip', False)
+        timeout = kwargs.pop('timeout', None)
         # copy kwargs, trimming items which value is None.
         # This is needed since DOcloud does not like entries like
         # "parameters" : null
@@ -570,15 +596,33 @@ class JobClient(object):
         for key, value in iteritems(kwargs):
             if value is not None:
                 mykwargs[key] = value
-        
-        response = self._post(self.url + "/jobs", data=json.dumps(mykwargs))
+
+        # create attachament info if needed
+        attachmentInfo = []
+        if input:
+            for raw_inp in input:
+                attachmentInfo.append(JobAttachmentInfo(raw_inp))
+            attachments = [{'name': a.name} for a in attachmentInfo]
+            mykwargs['attachments'] = attachments
+
+        # Create the job
+        response = self._post(self.url + "/jobs",
+                              data=json.dumps(mykwargs),
+                              timeout=timeout)
         self._check_created(response)
         job_url = response.headers['location']
-        job_id = job_url.rsplit("/",1)[1]
+        job_id = job_url.rsplit("/", 1)[1]
         self._info("Created job, id = " + job_id)
+
+        # upload attachments
+        if attachmentInfo:
+            for inp in attachmentInfo:
+                self.upload_job_attachment(job_id, 
+                                           attid=inp.name,
+                                           data=inp.get_data(),
+                                           gzip=gzip)
         return job_id
-    
-    
+
     def copy_job(self, jobid, shallow=None, **kwargs):
         """Creates a new job by copying an existing one.
         
@@ -1043,26 +1087,71 @@ class JobClient(object):
             self._check_ok_no_content(response)
         finally:
             att.close_file()
-        
-        
-    def wait_for_completion(self, jobid, timeout=None, waittime=-1, nice=None):    
-        """Waits for the specified job to finish.
-        
-        This loops and queries for the job execution status until the status is ended.
-        
-        This will wait for ``waittime`` seconds. A ``waittime`` of -1 means waiting
-        indefinitely.
-        
+
+    def wait_and_get_solution(self, jobid, timeout=None, waittime=-1, 
+                              nice=None):
+        """Waits for the specfied job to finish, then download solution.
+
+        This method calls ``wait_for_completion()`` then download solution
+        if any.
+
+        This will wait for ``waittime`` seconds. A ``waittime`` of -1 means
+        waiting indefinitely.
+
         The ``timeout`` parameter controls the timeout to listen on sockets.
-        
-        If ``nice`` is specified, this method will wait for that amount of seconds
-        between each execution status query.
-        
+
+        If ``nice`` is specified, this method will wait for that amount of
+        seconds between each execution status query.
+
         Args:
             jobid: The id of the job.
             timeout: The timeout for requests.
             waittime: The maximum time to wait.
-            nice: Additional sleep time between status requests.     
+            nice: Additional sleep time between status requests.
+
+        Returns:
+            A ``JobResponse`` with the execution status of the job and the
+                solution.
+        """
+        status = self.wait_for_completion(jobid,
+                                          timeout=timeout,
+                                          waittime=waittime,
+                                          nice=nice)
+        # prepare return value
+        response = JobResponse(jobid, executionStatus=status)
+        # get some job info
+        response.job_info = self.get_job(jobid)
+        solution_att_name = "solution.json"
+        attachments = response.job_info['attachments']
+        has_solution = False
+        for a in attachments:
+            if a["type"] == "OUTPUT_ATTACHMENT" and a["name"] == solution_att_name:
+                has_solution = True
+        # download solution
+        if status is not JobExecutionStatus.FAILED and has_solution:
+            response.solution = self.download_job_attachment(jobid,
+                                                             solution_att_name)
+        return response
+
+
+    def wait_for_completion(self, jobid, timeout=None, waittime=-1, nice=None):    
+        """Waits for the specified job to finish.
+
+        This loops and queries for the job execution status until the status is ended.
+
+        This will wait for ``waittime`` seconds. A ``waittime`` of -1 means waiting
+        indefinitely.
+
+        The ``timeout`` parameter controls the timeout to listen on sockets.
+
+        If ``nice`` is specified, this method will wait for that amount of seconds
+        between each execution status query.
+
+        Args:
+            jobid: The id of the job.
+            timeout: The timeout for requests.
+            waittime: The maximum time to wait.
+            nice: Additional sleep time between status requests.
 
         Returns:
             The job execution status as a ``JobExecutionStatus``.
@@ -1070,12 +1159,12 @@ class JobClient(object):
             DOcloudInterruptedException: if the ``waittime`` has expired.
         """
         nice_sec = self.nice if nice is None else nice
-     
+
         time_limit = time.time() + waittime 
         self._info("waiting for completion of {jobid} "
                    "with a waittime of {waittime}".format(jobid=jobid,
                                                           waittime=waittime))
-        status = None        
+        status = None
         while (not JobExecutionStatus.isEnded(status)):
             status = self.get_execution_status(jobid, timeout=timeout)
             if (waittime >= 0) and (time.time() > time_limit):
