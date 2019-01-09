@@ -17,7 +17,7 @@ setup(
   package_dir={'docloud': 'docloud'},
   package_data = { 'docloud' : localized_message_files },
   include_package_data = True,
-  version = '1.0.161',
+  version = '1.0.176',
   description = 'The IBM Decision Optimization on Cloud Python client',
   author = 'The IBM Decision Optimization on Cloud team',
   author_email = 'docloud@wwpdl.vnet.ibm.com',
