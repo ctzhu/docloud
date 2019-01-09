@@ -11,6 +11,17 @@ from six import iteritems, string_types
 
 import requests
 
+import sys
+
+# initialize gettext
+localedir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "locale")
+import gettext
+translation = gettext.translation('docloud', localedir=localedir, fallback=True)
+if sys.version_info[0] == '2':
+    _ = translation.ugettext
+else:
+    _ = translation.gettext
+
 
 class JobAttachmentInfo(object):
     """JobAttachmentInfo is used to create an attachment.
@@ -77,8 +88,7 @@ class JobAttachmentInfo(object):
         notNone = int(self.file is not None) + int(self.data is not None) \
             + int(self.filename is not None)
         if (notNone != 1):
-            raise ParameterError("JobClient.uploadAttachment() needs one of"
-                                 " (data, file, filename) parameters")
+            raise ParameterError(_("JobClient.uploadAttachment() needs one of (data, file, filename) parameters"))
 
     def __build_from_dict(self, obj):
         # parse the obj as a dict for attachment file, filename or data
@@ -184,7 +194,7 @@ class JobResponse(object):
 
 
 class DOcloudException(Exception):
-    """ The base class for exceptions raised by the DOcloud client."""
+    """ The base class for exceptions raised by the DOcplexcloud client."""
     def __init__(self, msg):
         Exception.__init__(self, msg)
         self.message = msg
@@ -238,7 +248,7 @@ class DOcloudInterruptedException(DOcloudException):
 
 
 class JobClient(object):
-    """A client to create, submit and monitor jobs on DOcloud.
+    """A client to create, submit and monitor jobs on DOcplexcloud.
     
     Attributes:
         url(str): The URL this client connects to.
@@ -643,7 +653,7 @@ class JobClient(object):
             clientName (optional): The name of the client.
 
         Note:
-            The ``kwargs`` are JSON encoded and passed to the DOcloud service.
+            The ``kwargs`` are JSON encoded and passed to the DOcplexcloud service.
 
         Returns:
             The jobid.
@@ -652,7 +662,7 @@ class JobClient(object):
         gzip = kwargs.pop('gzip', False)
         timeout = kwargs.pop('timeout', None)
         # copy kwargs, trimming items which value is None.
-        # This is needed since DOcloud does not like entries like
+        # This is needed since DOcplexcloud does not like entries like
         # "parameters" : null
         mykwargs = {}
         for key, value in iteritems(kwargs):
@@ -674,7 +684,7 @@ class JobClient(object):
         self._check_created(response)
         job_url = response.headers['location']
         job_id = job_url.rsplit("/", 1)[1]
-        self._info("Created job, id = " + job_id)
+        self._info(_("Created job, id = {job_id}").format(job_id=job_id))
 
         # upload attachments
         if attachmentInfo:
@@ -702,7 +712,7 @@ class JobClient(object):
             shallow: Indicates if the copy is shallow.
         
         Note:
-            The ``kwargs`` are JSON encoded and passed to the DOcloud service as
+            The ``kwargs`` are JSON encoded and passed to the DOcplexcloud service as
             job creation data override.
         
         Returns:
@@ -720,7 +730,7 @@ class JobClient(object):
         self._check_created(response)
         job_url = response.headers['location']
         job_id = job_url.rsplit("/",1)[1]
-        self._info("Copied job, id = " + job_id)
+        self._info(_("Copied job, id = {job_id}").format(job_id=job_id))
         return job_id
 
     def recreate_job(self, jobid, execute=None, **kwargs):
@@ -739,7 +749,7 @@ class JobClient(object):
             execute: Indicates if the job must be executed immediately.
         
         Note:
-            The ``kwargs`` are JSON encoded and passed to the DOcloud service as
+            The ``kwargs`` are JSON encoded and passed to the DOcplexcloud service as
             job creation data override.
         
         Returns:
@@ -753,12 +763,12 @@ class JobClient(object):
         url = '{base_url}/jobs/{jobid}/recreate{execute}'.format(base_url=self.url,
                                                                  jobid=jobid,
                                                                  execute=execute_option)
-        self._info("Recreating job id = " + jobid)
+        self._info(_("Recreating job id = {job_id}").format(job_id=jobid))
         response = self._post(url, data=override_data)
         self._check_created(response)
         job_url = response.headers['location']
         job_id = job_url.rsplit("/",1)[1]
-        self._info("Recreated job, new id = " + job_id)
+        self._info(_("Recreated job, new id = {job_id}").format(job_id=job_id))
         return job_id
 
     def abort_job(self, jobid, timeout=None):
@@ -807,7 +817,7 @@ class JobClient(object):
             timeout: The timeout for requests. 
         """
         url = '{base_url}/jobs'.format(base_url=self.url)
-        self._info("deleting all jobs ")
+        self._info(_("deleting all jobs"))
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
 
@@ -823,12 +833,12 @@ class JobClient(object):
             True if the job deletion was successful.
         """
         url = '{base_url}/jobs/{jobid}'.format(base_url=self.url,jobid=jobid)
-        self._info("deleting job {}".format(jobid))
+        self._info(_("deleting job {job_id}").format(job_id=jobid))
         response = self._delete(url, timeout=timeout)
         self._check_ok(response)
         j = response.json()
         deleteStatus = (j['status'] == 'DELETED')
-        self._info("   deleted with status = {}".format(j['status']))
+        self._info(_("   deleted with status = {}").format(j['status']))
         return deleteStatus
 
 
@@ -845,13 +855,13 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/attachments/{attid}'.format(
               base_url=self.url, jobid=jobid, attid=attid)
-        self._info("deleting job attachment {attid} of job {jobid}"
+        self._info(_("deleting job attachment {attid} of job {jobid}")
                    .format(attid=attid, jobid=jobid))
         response = self._delete(url, timeout=timeout)
         self._check_ok(response)
         j = response.json()
         deleteStatus = (j['status'] == 'DELETED')
-        self._info("   deleted with status = {}".format(j['status']))
+        self._info(_("   deleted with status = {}").format(j['status']))
         return deleteStatus
     
     def delete_job_attachments(self, jobid, timeout=None):
@@ -863,7 +873,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/attachments'.format(base_url=self.url,
                                                            jobid=jobid)
-        self._info("deleting all job attachments of job {}".format(jobid))
+        self._info(_("deleting all job attachments of job {}").format(jobid))
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
 
@@ -883,7 +893,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/attachments/{attid}/blob'\
             .format(base_url=self.url, jobid=jobid, attid=attid)
-        self._info("downloading attachment {attid} of job {jobid}"
+        self._info(_("downloading attachment {attid} of job {jobid}")
                    .format(attid=attid, jobid=jobid))
         response = self._get(url, timeout=timeout)
         self._check_ok(response)
@@ -916,7 +926,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/attachments/{attid}/blob'\
             .format(base_url=self.url, jobid=jobid, attid=attid)
-        self._info("downloading attachment {attid} of job {jobid} as stream"
+        self._info(_("downloading attachment {attid} of job {jobid} as stream")
                    .format(attid=attid, jobid=jobid))
         response = self._get(url, timeout=timeout, stream=True)
         self._check_ok(response)
@@ -934,7 +944,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/log/blob'.format(base_url=self.url, 
                                                         jobid=jobid)
-        self._info("downloading log of job {jobid}".format(jobid=jobid))
+        self._info(_("downloading log of job {jobid}").format(jobid=jobid))
         response = self._get(url, timeout=timeout)       
         self._check_ok(response)     
         return response.content
@@ -949,7 +959,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/execute'.format(base_url=self.url, 
                                                        jobid=jobid)
-        self._info("executing job {}".format(jobid))
+        self._info(_("executing job {}").format(jobid))
         response = self._post(url, timeout)
         self._check_ok_no_content(response)
 
@@ -967,7 +977,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/failure'.format(base_url=self.url, 
                                                        jobid=jobid)
-        self._info("getting job failure info for job {}".format(jobid))
+        self._info(_("getting job failure info for job {}").format(jobid))
         response = self._get(url, timeout=timeout)
         self._check_status(response, [200, 204])
         if (response.status_code == 200):
@@ -985,7 +995,7 @@ class JobClient(object):
             The job information as a ``dict`` containing the job information.
         """
         url = '{base_url}/jobs/{jobid}'.format(base_url=self.url, jobid=jobid)
-        self._info("getting job info for job {}".format(jobid))
+        self._info(_("getting job info for job {}").format(jobid))
         response = self._get(url, timeout)
         self._check_ok(response)
         return response.json()
@@ -1002,7 +1012,7 @@ class JobClient(object):
             containing the job information.
         """
         url = '{base_url}/jobs'.format(base_url=self.url)
-        self._info("getting all jobs info")
+        self._info(_("getting all jobs info"))
         response = self._get(url, timeout=timeout)
         self._check_ok(response)
         return response.json()
@@ -1021,7 +1031,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/attachments/{attid}'\
             .format(base_url=self.url, jobid=jobid, attid=attid)
-        self._info("getting attachment info {attid} from job {jobid}"
+        self._info(_("getting attachment info {attid} from job {jobid}")
                    .format(attid=attid, jobid=jobid))
         response = self._get(url, timeout=timeout)
         self._check_ok(response)
@@ -1047,7 +1057,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/attachments'.format(base_url=self.url, 
                                                            jobid=jobid)
-        self._info("getting all attachment info from job {}".format(jobid))
+        self._info(_("getting all attachment info from job {}").format(jobid))
         response = self._get(url, timeout=None)
         self._check_ok(response)
         return response.json()
@@ -1111,7 +1121,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}/execute?kill=true'\
             .format(base_url=self.url, jobid=jobid)
-        self._info("Killing job {jobid}".format(jobid=jobid))
+        self._info(_("Killing job {jobid}").format(jobid=jobid))
         response = self._delete(url, timeout=timeout)
         self._check_ok_no_content(response)
     
@@ -1141,8 +1151,8 @@ class JobClient(object):
             # now let's upload that
             url = '{base_url}/jobs/{jobid}/attachments/{attid}/blob'\
                 .format(base_url=self.url, jobid=jobid, attid=attid)    
-            self._info("uploading attachment to " + url)
-                      
+            self._info(_("uploading attachment to {url}").format(url=url))
+
             response = self._put(url, 
                                  data=att.get_data_or_file(gzip=gzip),
                                  gzip=gzip)
@@ -1227,14 +1237,13 @@ class JobClient(object):
         nice_sec = self.nice if nice is None else nice
 
         time_limit = time.time() + waittime 
-        self._info("waiting for completion of {jobid} "
-                   "with a waittime of {waittime}".format(jobid=jobid,
-                                                          waittime=waittime))
+        self._info(_("waiting for completion of {jobid} with a waittime of {waittime}").format(jobid=jobid,
+                                                                                               waittime=waittime))
         status = None
         while (not JobExecutionStatus.isEnded(status)):
             status = self.get_execution_status(jobid, timeout=timeout)
             if (waittime >= 0) and (time.time() > time_limit):
-                raise DOcloudInterruptedException("Timeout after {0}".format(waittime), jobid=jobid)
+                raise DOcloudInterruptedException(_("Timeout after {0}").format(waittime), jobid=jobid)
             # if the status is ended, don't need to wait
             if (not JobExecutionStatus.isEnded(status)) and (nice_sec > 0):
                 time.sleep(nice_sec)  # sleep to be nice

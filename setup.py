@@ -1,12 +1,23 @@
-from distutils.core import setup
 import sys
+
+try:
+    from setuptools import setup
+except ImportError:
+    from distutils.core import setup
+
+
 required=[ 'requests', 'six' ]
 if ((sys.version_info[0]) < 3) or ((sys.version_info[0] == 3) and (sys.version_info[1] < 4)):
     required.append('enum34')
+localized_message_files = [ 'locale/fr/LC_MESSAGES/docloud.mo',
+                            'locale/en/LC_MESSAGES/docloud.mo']
 setup(
   name = 'docloud',
   packages = ['docloud'],
-  version = '1.0.132',
+  package_dir={'docloud': 'docloud'},
+  package_data = { 'docloud' : localized_message_files },
+  include_package_data = True,
+  version = '1.0.155',
   description = 'The IBM Decision Optimization on Cloud Python client',
   author = 'The IBM Decision Optimization on Cloud team',
   author_email = 'docloud@wwpdl.vnet.ibm.com',

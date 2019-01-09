@@ -1,4 +1,4 @@
-'''The docloud.status module contains classes to store various DOcloud status.
+'''The docloud.status module contains classes to store various DOcplexcloud status.
 '''
 
 from enum import Enum
