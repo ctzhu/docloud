@@ -6,7 +6,7 @@ if ((sys.version_info[0]) < 3) or ((sys.version_info[0] == 3) and (sys.version_i
 setup(
   name = 'docloud',
   packages = ['docloud'],
-  version = '1.0.65',
+  version = '1.0.67',
   description = 'The IBM Decision Optimization on Cloud Python client',
   author = 'The IBM Decision Optimization on Cloud team',
   author_email = 'docloud@wwpdl.vnet.ibm.com',
