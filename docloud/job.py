@@ -83,6 +83,8 @@ class JobAttachmentInfo(object):
                 basename = os.path.basename(att_info)
                 self.name = basename
                 self.filename = att_info
+            else:
+                raise ParameterError(_("JobClient.uploadAttachment(): File not found \"%s\"") % att_info)
         # Check that this is well constructed and that only one of file, data
         # or filename is set
         notNone = int(self.file is not None) + int(self.data is not None) \
@@ -93,15 +95,9 @@ class JobAttachmentInfo(object):
     def __build_from_dict(self, obj):
         # parse the obj as a dict for attachment file, filename or data
         self.name = obj['name']
-        dict_file = obj.get('file', None)
-        if (dict_file is not None):
-            self.file = dict_file
-        dict_filename = obj.get('filename', None)
-        if (dict_filename is not None):
-            self.filename = dict_filename
-        dict_data = obj.get('data', None)
-        if (dict_data is not None):
-            self.data = dict_data
+        self.file = obj.get('file', self.file)
+        self.filename = obj.get('filename', self.filename)
+        self.data = obj.get('data', self.data)
 
     def get_data(self):
         """ Returns the data for this attachment.
