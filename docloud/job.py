@@ -1048,7 +1048,7 @@ class JobClient(object):
         url = '{base_url}/jobs/{jobid}/execute'.format(base_url=self.url,
                                                        jobid=jobid)
         self._info(_("executing job {}").format(jobid))
-        response = self._post(url, timeout=timeout)
+        response = self._post(url, timeout)
         self._check_ok_no_content(response)
 
     def get_failure_info(self, jobid, timeout=None):
@@ -1084,7 +1084,7 @@ class JobClient(object):
         """
         url = '{base_url}/jobs/{jobid}'.format(base_url=self.url, jobid=jobid)
         self._info(_("getting job info for job {}").format(jobid))
-        response = self._get(url, timeout=timeout)
+        response = self._get(url, timeout)
         self._check_ok(response)
         return response.json()
 
